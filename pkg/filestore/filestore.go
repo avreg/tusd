@@ -28,20 +28,50 @@ import (
 
 // See the handler.DataStore interface for documentation about the different
 // methods.
+
+const DefaultDirPerm = 0775
+const DefaultFilePerm = 0664
+
+type FileStoreOptions struct {
+	DirPerm  uint32
+	FilePerm uint32
+}
+
+var defaultOptions = FileStoreOptions{
+	DirPerm:  DefaultDirPerm,
+	FilePerm: DefaultFilePerm,
+}
+
 type FileStore struct {
 	// Relative or absolute path to store files in. FileStore does not check
 	// whether the path exists, use os.MkdirAll in this case on your own.
 	Path string
 
-	DirPerm  fs.FileMode
-	FilePerm fs.FileMode
+	DirModePerm  fs.FileMode
+	FileModePerm fs.FileMode
 }
 
 // New creates a new file based storage backend. The directory specified will
 // be used as the only storage entry. This method does not check
 // whether the path exists, use os.MkdirAll to ensure.
-func New(path string, dirPerms uint32, filePerms uint32) FileStore {
-	return FileStore{path, os.FileMode(dirPerms), os.FileMode(filePerms)}
+func New(path string) FileStore {
+	return FileStore{
+		Path:         path,
+		DirModePerm:  os.FileMode(defaultOptions.DirPerm) & os.ModePerm,
+		FileModePerm: os.FileMode(defaultOptions.FilePerm) & os.ModePerm,
+	}
+}
+
+func NewWithOptions(path string, options *FileStoreOptions) FileStore {
+	if options == nil {
+		options = &defaultOptions
+	}
+
+	return FileStore{
+		Path:         path,
+		DirModePerm:  os.FileMode(options.DirPerm) & os.ModePerm,
+		FileModePerm: os.FileMode(options.FilePerm) & os.ModePerm,
+	}
 }
 
 // UseIn sets this store as the core data store in the passed composer and adds
@@ -74,16 +104,16 @@ func (store FileStore) NewUpload(ctx context.Context, info handler.FileInfo) (ha
 	}
 
 	// Create binary file with no content
-	if err := createFile(binPath, store.DirPerm, store.FilePerm, nil); err != nil {
+	if err := createFile(binPath, store.DirModePerm, store.FileModePerm, nil); err != nil {
 		return nil, err
 	}
 
 	upload := &fileUpload{
-		info:     info,
-		infoPath: infoPath,
-		binPath:  binPath,
-		dirPerm:  store.DirPerm,
-		filePerm: store.FilePerm,
+		info:         info,
+		infoPath:     infoPath,
+		binPath:      binPath,
+		dirModePerm:  store.DirModePerm,
+		fileModePerm: store.FileModePerm,
 	}
 
 	// writeInfo creates the file by itself if necessary
@@ -133,11 +163,11 @@ func (store FileStore) GetUpload(ctx context.Context, id string) (handler.Upload
 	info.Offset = stat.Size()
 
 	return &fileUpload{
-		info:     info,
-		binPath:  binPath,
-		infoPath: infoPath,
-		dirPerm:  store.DirPerm,
-		filePerm: store.FilePerm,
+		info:         info,
+		binPath:      binPath,
+		infoPath:     infoPath,
+		dirModePerm:  store.DirModePerm,
+		fileModePerm: store.FileModePerm,
 	}, nil
 }
 
@@ -172,8 +202,8 @@ type fileUpload struct {
 	// binPath is the path to the binary file (which has no extension)
 	binPath string
 
-	dirPerm  fs.FileMode
-	filePerm fs.FileMode
+	dirModePerm  fs.FileMode
+	fileModePerm fs.FileMode
 }
 
 func (upload *fileUpload) GetInfo(ctx context.Context) (handler.FileInfo, error) {
@@ -181,7 +211,7 @@ func (upload *fileUpload) GetInfo(ctx context.Context) (handler.FileInfo, error)
 }
 
 func (upload *fileUpload) WriteChunk(ctx context.Context, offset int64, src io.Reader) (int64, error) {
-	file, err := os.OpenFile(upload.binPath, os.O_WRONLY|os.O_APPEND, upload.filePerm)
+	file, err := os.OpenFile(upload.binPath, os.O_WRONLY|os.O_APPEND, upload.fileModePerm)
 	if err != nil {
 		return 0, err
 	}
@@ -220,7 +250,7 @@ func (upload *fileUpload) Terminate(ctx context.Context) error {
 }
 
 func (upload *fileUpload) ConcatUploads(ctx context.Context, uploads []handler.Upload) (err error) {
-	file, err := os.OpenFile(upload.binPath, os.O_WRONLY|os.O_APPEND, upload.filePerm)
+	file, err := os.OpenFile(upload.binPath, os.O_WRONLY|os.O_APPEND, upload.fileModePerm)
 	if err != nil {
 		return err
 	}
@@ -261,7 +291,7 @@ func (upload *fileUpload) writeInfo() error {
 	if err != nil {
 		return err
 	}
-	return createFile(upload.infoPath, upload.dirPerm, upload.filePerm, data)
+	return createFile(upload.infoPath, upload.dirModePerm, upload.fileModePerm, data)
 }
 
 func (upload *fileUpload) FinishUpload(ctx context.Context) error {
